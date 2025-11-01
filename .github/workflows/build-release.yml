@@ -49,8 +49,7 @@ jobs:
           FORCE_ARCH=${{ matrix.arch }} ./packaging/rpm/build.sh
 
       - name: Upload artifact
-        if: ${{ env.ACT != 'true' }}
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: rpm-${{ matrix.arch }}
           path: |
@@ -58,7 +57,6 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: ${{ env.ACT != 'true' }}
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -93,20 +91,6 @@ jobs:
           artifactErrorsFailBuild: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Mirror pre-release to GUI repo
-        if: ${{ !startsWith(github.ref, 'refs/tags/') && secrets.GUI_REPO_TOKEN != '' && github.repository != 'Akuma-real/Mihomo-GUI' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          repository: Akuma-real/Mihomo-GUI
-          tag_name: ${{ env.PRE_TAG }}
-          name: Pre-release Builds (RPM)
-          prerelease: true
-          make_latest: false
-          files: |
-            dist/**/*.rpm
-        env:
-          GITHUB_TOKEN: ${{ secrets.GUI_REPO_TOKEN }}
-
       - name: Publish tagged release
         if: startsWith(github.ref, 'refs/tags/')
         uses: ncipollo/release-action@v1
@@ -128,16 +112,4 @@ jobs:
           artifactErrorsFailBuild: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Mirror tagged release to GUI repo
-        if: ${{ startsWith(github.ref, 'refs/tags/') && secrets.GUI_REPO_TOKEN != '' && github.repository != 'Akuma-real/Mihomo-GUI' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          repository: Akuma-real/Mihomo-GUI
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }} (RPM)
-          prerelease: false
-          make_latest: true
-          files: |
-            dist/**/*.rpm
-        env:
-          GITHUB_TOKEN: ${{ secrets.GUI_REPO_TOKEN }}
+      
