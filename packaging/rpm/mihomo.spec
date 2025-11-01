@@ -36,6 +36,7 @@ Source3:        mihomo.desktop           # Dashboard 桌面入口
 Source4:        mihomo-gui               # 打开 Dashboard 脚本
 Source5:        mihomo-control           # 图形控制器（Tkinter）
 Source6:        mihomo-control.desktop   # 控制器桌面入口
+Source7:        mihomo-control-pkexec    # 提权包装器，传递显示/总线环境
 
 %description
 Mihomo 是 Clash.Meta 内核的延续版本。本包直接打包上游预编译二进制，
@@ -65,6 +66,7 @@ install -m 0755 "%{_sourcedir}/mihomo-gui" "%{buildroot}%{_bindir}/mihomo-gui"
 install -m 0644 "%{_sourcedir}/mihomo.desktop" "%{buildroot}%{_datadir}/applications/mihomo.desktop"
 install -m 0755 "%{_sourcedir}/mihomo-control" "%{buildroot}%{_bindir}/mihomo-control"
 install -m 0644 "%{_sourcedir}/mihomo-control.desktop" "%{buildroot}%{_datadir}/applications/mihomo-control.desktop"
+install -m 0755 "%{_sourcedir}/mihomo-control-pkexec" "%{buildroot}%{_bindir}/mihomo-control-pkexec"
 
 %post
 # 安装或升级后刷新 unit 缓存
@@ -95,6 +97,7 @@ fi
 %{_bindir}/mihomo-gui
 %{_datadir}/applications/mihomo.desktop
 %{_bindir}/mihomo-control
+%{_bindir}/mihomo-control-pkexec
 %{_datadir}/applications/mihomo-control.desktop
 
 %changelog

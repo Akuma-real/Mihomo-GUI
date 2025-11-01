@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 通过 pkexec 提权并显式传递展示/总线环境，保证 GUI 能正确显示
+exec pkexec env \
+  DISPLAY="${DISPLAY-}" \
+  WAYLAND_DISPLAY="${WAYLAND_DISPLAY-}" \
+  XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR-}" \
+  DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS-}" \
+  XAUTHORITY="${XAUTHORITY-}" \
+  /usr/bin/mihomo-control "$@"
+

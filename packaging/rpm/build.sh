@@ -212,6 +212,7 @@ cp -f "$workdir/packaging/rpm/mihomo.desktop" "$SOURCES/"
 cp -f "$workdir/packaging/rpm/mihomo-gui" "$SOURCES/"
 cp -f "$workdir/packaging/rpm/mihomo-control" "$SOURCES/"
 cp -f "$workdir/packaging/rpm/mihomo-control.desktop" "$SOURCES/"
+cp -f "$workdir/packaging/rpm/mihomo-control-pkexec" "$SOURCES/"
 
 echo "将构建 Version=${VER} Release=${REL}" >&2
 
