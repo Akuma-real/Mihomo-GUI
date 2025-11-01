@@ -23,6 +23,7 @@ ExclusiveArch:  x86_64 aarch64 armv7hl
 Requires:         xdg-utils
 Requires:         python3
 Requires:         python3-tkinter
+Requires:         python3-pyyaml
 Requires:         polkit
 Requires(post):   systemd
 Requires(preun):  systemd

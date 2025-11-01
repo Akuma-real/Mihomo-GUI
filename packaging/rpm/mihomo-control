@@ -9,9 +9,17 @@ import sys
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from tkinter import scrolledtext
+import re
 
 SERVICE = "mihomo"
+# GUI 环境变量仍可覆盖，但按钮可用性取决于是否配置了 external-controller
 DASHBOARD_URL = os.environ.get("MIHOMO_DASHBOARD_URL", "http://127.0.0.1:9090/ui")
+
+try:
+    import yaml  # type: ignore
+    _HAVE_YAML = True
+except Exception:
+    _HAVE_YAML = False
 
 
 def have(cmd: str) -> bool:
@@ -101,7 +109,8 @@ class App(tk.Tk):
         ttk.Button(frm_btn, text="查看状态", command=self.show_status).grid(row=1, column=2, sticky="nsew", **pad)
 
         # 第三行：打开 Dashboard 与退出
-        ttk.Button(frm_btn, text="打开 Dashboard", command=self.open_dashboard).grid(row=2, column=0, columnspan=2, sticky="nsew", **pad)
+        self.btn_open = ttk.Button(frm_btn, text="打开 Dashboard", command=self.open_dashboard)
+        self.btn_open.grid(row=2, column=0, columnspan=2, sticky="nsew", **pad)
         ttk.Button(frm_btn, text="退出", command=self.destroy).grid(row=2, column=2, sticky="nsew", **pad)
 
         for i in range(3):
@@ -112,6 +121,8 @@ class App(tk.Tk):
         frm_hint = ttk.Frame(self)
         frm_hint.pack(fill=tk.X, **pad)
         ttk.Label(frm_hint, text="提示：需要进行启动/停止等操作时会请求提权（pkexec）").pack(side=tk.LEFT)
+        # 初始化“打开 Dashboard”按钮状态
+        self._update_open_button()
 
     def _sysconfig_path(self) -> str:
         return "/etc/sysconfig/mihomo"
@@ -167,6 +178,8 @@ class App(tk.Tk):
         self.var_cfg.set(filename)
         # 写入 /etc/sysconfig/mihomo 并重启服务
         self.apply_config(filename)
+        # 更新按钮状态
+        self._update_open_button()
 
     def open_sysconfig_editor(self):
         path = self._sysconfig_path()
@@ -202,6 +215,7 @@ class App(tk.Tk):
                     self._run_op("重启", ["systemctl", "restart", SERVICE])
                 self.var_cfg.set(self._get_current_config())
                 messagebox.showinfo("已保存", "sysconfig 已保存" + ("并已重启服务" if restart else ""))
+                self._update_open_button()
             except Exception:
                 script = (
                     "cat >/etc/sysconfig/mihomo <<'EOF'\n" + new_content + "EOF\n"
@@ -211,6 +225,7 @@ class App(tk.Tk):
                     run_root(["bash", "-lc", script])
                     self.var_cfg.set(self._get_current_config())
                     messagebox.showinfo("已保存", "sysconfig 已保存" + ("并已重启服务" if restart else ""))
+                    self._update_open_button()
                 except Exception as e:
                     messagebox.showerror("保存失败", f"无法保存到 {path}:\n{e}")
 
@@ -221,7 +236,8 @@ class App(tk.Tk):
         ttk.Button(frm_btn, text="关闭", command=win.destroy).pack(side=tk.LEFT, padx=8, pady=8)
 
     def apply_config(self, config_path: str):
-        cfg_dir = os.path.dirname(config_path) or "/etc/mihomo"
+        # 固定系统级工作目录，避免在用户配置目录生成运行文件
+        cfg_dir = "/var/lib/mihomo"
         content = (
             f"MIHOMO_DIR=\"{cfg_dir}\"\n"
             f"MIHOMO_CONFIG=\"{config_path}\"\n"
@@ -247,6 +263,8 @@ class App(tk.Tk):
                 messagebox.showinfo("已应用", f"已切换配置：\n{config_path}")
             except Exception as e:
                 messagebox.showerror("写入失败", f"无法写入 /etc/sysconfig/mihomo：\n{e}")
+        # 应用后刷新按钮状态
+        self._update_open_button()
 
     def refresh_status(self):
         active = is_active()
@@ -294,6 +312,11 @@ class App(tk.Tk):
             messagebox.showinfo("打开失败", f"未找到 xdg-open，请手动打开：\n{DASHBOARD_URL}")
             return
         try:
+            # 动态推断 URL：优先根据 YAML external-controller(-tls)
+            url = self._infer_dashboard_url()
+            if not url:
+                messagebox.showwarning("未配置外部控制器", "未在配置中找到 external-controller / external-controller-tls，无法打开 Dashboard。")
+                return
             # 若以 root 运行（pkexec 模式），优先以原用户打开浏览器
             if os.geteuid() == 0:
                 pk_uid = os.environ.get("PKEXEC_UID")
@@ -306,15 +329,93 @@ class App(tk.Tk):
                             v = os.environ.get(k)
                             if v:
                                 env_vars[k] = v
-                        cmd = ["runuser", "-u", f"#{uid}", "--", "env"] + [f"{k}={v}" for k, v in env_vars.items()] + ["xdg-open", DASHBOARD_URL]
+                        # 以原用户名而非“#UID”运行，避免 runuser 解析失败
+                        cmd = ["runuser", "-u", user, "--", "env"] \
+                              + [f"{k}={v}" for k, v in env_vars.items()] \
+                              + ["xdg-open", url]
                         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         return
                     except Exception:
                         pass
             # 普通用户模式或回退路径
-            subprocess.Popen(["xdg-open", DASHBOARD_URL], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
             messagebox.showerror("打开失败", f"无法打开浏览器：\n{e}")
+
+    # 推断 Dashboard URL：
+    # 1) external-controller-tls -> https://<addr>/ui
+    # 2) external-controller     -> http://<addr>/ui
+    # 3) 以上均无 -> None（按钮将禁用）
+    def _infer_dashboard_url(self):
+        path = self.var_cfg.get().strip()
+        if not path or not os.path.isfile(path):
+            return None
+        ctrl_tls = None
+        ctrl = None
+        # 首选使用 PyYAML
+        if _HAVE_YAML:
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = yaml.safe_load(f)
+                if isinstance(data, dict):
+                    ctrl_tls = data.get('external-controller-tls')
+                    ctrl = data.get('external-controller')
+            except Exception:
+                ctrl_tls = None
+                ctrl = None
+        # 退化：用正则扫描一遍文本（对简单键值足够稳健）
+        if ctrl_tls is None and ctrl is None:
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    text = f.read()
+                m_tls = re.search(r"^\s*external-controller-tls\s*:\s*([^#\n]+)", text, re.M)
+                m = re.search(r"^\s*external-controller\s*:\s*([^#\n]+)", text, re.M)
+                if m_tls:
+                    ctrl_tls = m_tls.group(1).strip().strip('"\'')
+                if m:
+                    ctrl = m.group(1).strip().strip('"\'')
+            except Exception:
+                pass
+        # 归一化 0.0.0.0 / ::
+        def _normalize_hostport(val):
+            if not isinstance(val, str):
+                return None
+            v = val.strip()
+            v = v.strip('"\'')
+            # 如果是 0.0.0.0 或 ::，替换为回环地址以便浏览器访问
+            if v.startswith('0.0.0.0:'):
+                v = '127.0.0.1:' + v.split(':', 1)[1]
+            elif v.startswith('::') or v.startswith('[::]'):
+                # 尽力匹配端口
+                if v.startswith('[::]') and ':' in v[4:]:
+                    port = v.split(']:', 1)[1]
+                    v = '[::1]:' + port
+                else:
+                    # 粗略：无方括号时，保留原串
+                    v = v.replace('::', '::1')
+            return v
+        if ctrl_tls:
+            vp = _normalize_hostport(ctrl_tls)
+            if vp:
+                return f"https://{vp}/ui"
+        if ctrl:
+            vp = _normalize_hostport(ctrl)
+            if vp:
+                return f"http://{vp}/ui"
+        return None
+
+    def _update_open_button(self):
+        url = self._infer_dashboard_url()
+        if url:
+            try:
+                self.btn_open.configure(state=tk.NORMAL)
+            except Exception:
+                pass
+        else:
+            try:
+                self.btn_open.configure(state=tk.DISABLED)
+            except Exception:
+                pass
 
 
 class StatusDialog(tk.Toplevel):

@@ -3,7 +3,7 @@
 #   sudo systemctl daemon-reload && sudo systemctl restart mihomo
 
 # 配置目录（用于相对路径资源、外置 UI 等）
-MIHOMO_DIR="/etc/mihomo"
+MIHOMO_DIR="/var/lib/mihomo"
 
 # 配置文件（可填绝对路径或相对 MIHOMO_DIR 的文件名）
 # 留空表示未设置（服务将拒绝启动，直到你指定）

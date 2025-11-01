@@ -1,18 +1,185 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-URL="${MIHOMO_DASHBOARD_URL:-http://127.0.0.1:9090/ui}"
+import os
+import re
+import subprocess
+import sys
+import urllib.request
+import urllib.error
+import ssl
+from urllib.parse import urlparse
 
-if command -v systemctl >/dev/null 2>&1; then
-  if ! systemctl is-active --quiet mihomo 2>/dev/null; then
-    echo "提示：mihomo 服务未运行，Dashboard 可能无法访问。" >&2
-    echo "可执行：sudo systemctl start mihomo 或 sudo systemctl enable --now mihomo" >&2
-  fi
-fi
+DEFAULT_URL = "http://127.0.0.1:9090/ui"
+SERVICE = "mihomo"
+SYSCONFIG = "/etc/sysconfig/mihomo"
 
-if command -v xdg-open >/dev/null 2>&1; then
-  nohup xdg-open "$URL" >/dev/null 2>&1 &
-else
-  echo "未找到 xdg-open，请手动在浏览器打开：$URL" >&2
-fi
 
+def have(cmd: str) -> bool:
+    return subprocess.call(["which", cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+
+
+def read_sysconfig(path: str):
+    env = {}
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith('#'):
+                    continue
+                m = re.match(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", s)
+                if not m:
+                    continue
+                k, v = m.group(1), m.group(2).strip()
+                if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                    v = v[1:-1]
+                env[k] = v
+    except Exception:
+        pass
+    return env
+
+
+def normalize_hostport(v: str):
+    if not isinstance(v, str):
+        return None
+    v = v.strip().strip('\"\'')
+    if v.startswith('0.0.0.0:'):
+        v = '127.0.0.1:' + v.split(':', 1)[1]
+    elif v.startswith('[::]'):
+        parts = v.split(']:', 1)
+        if len(parts) == 2:
+            v = '[::1]:' + parts[1]
+    elif v.startswith('::'):
+        v = v.replace('::', '::1', 1)
+    return v
+
+
+def infer_url_from_yaml(cfg_path: str):
+    ctrl_tls = None
+    ctrl = None
+    # 先尝试 PyYAML
+    try:
+        import yaml  # type: ignore
+
+        with open(cfg_path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+        if isinstance(data, dict):
+            ctrl_tls = data.get('external-controller-tls')
+            ctrl = data.get('external-controller')
+    except Exception:
+        ctrl_tls = None
+        ctrl = None
+
+    # 回退正则
+    if ctrl_tls is None and ctrl is None:
+        try:
+            with open(cfg_path, 'r', encoding='utf-8') as f:
+                text = f.read()
+            m_tls = re.search(r"^\s*external-controller-tls\s*:\s*([^#\n]+)", text, re.M)
+            m = re.search(r"^\s*external-controller\s*:\s*([^#\n]+)", text, re.M)
+            if m_tls:
+                ctrl_tls = m_tls.group(1).strip().strip('\"\'')
+            if m:
+                ctrl = m.group(1).strip().strip('\"\'')
+        except Exception:
+            pass
+
+    if ctrl_tls:
+        hp = normalize_hostport(ctrl_tls)
+        if hp:
+            return f"https://{hp}/ui"
+    if ctrl:
+        hp = normalize_hostport(ctrl)
+        if hp:
+            return f"http://{hp}/ui"
+    return None
+
+
+def main():
+    # 提示服务状态（不阻塞）
+    if have('systemctl'):
+        try:
+            r = subprocess.run(["systemctl", "is-active", "--quiet", SERVICE])
+            if r.returncode != 0:
+                print("提示：mihomo 服务未运行，Dashboard 可能无法访问。", file=sys.stderr)
+                print("可执行：sudo systemctl start mihomo 或 sudo systemctl enable --now mihomo", file=sys.stderr)
+        except Exception:
+            pass
+
+    # 解析 URL：优先环境变量，其次 YAML，自后回退默认
+    url = os.environ.get("MIHOMO_DASHBOARD_URL")
+    used_default = False
+    if not url:
+        env = read_sysconfig(SYSCONFIG)
+        cfg_path = env.get('MIHOMO_CONFIG', '')
+        if cfg_path and os.path.isfile(cfg_path):
+            url = infer_url_from_yaml(cfg_path)
+        if not url:
+            used_default = True
+            url = DEFAULT_URL
+
+    if used_default:
+        print(f"未在配置中找到 external-controller(-tls)，使用默认地址：{url}", file=sys.stderr)
+
+    # 快速可达性探测：HEAD /ui -> 若 405/501 再 GET，超时 1.5s
+    def probe(u: str, timeout: float = 1.5) -> bool:
+        try:
+            req = urllib.request.Request(u, method='HEAD', headers={'User-Agent': 'mihomo-gui/1.0'})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                # 任意响应即认为可达
+                return True
+        except urllib.error.HTTPError as e:
+            # 401/403（需要 secret）、404/301 等都视为端口可达
+            if e.code in (301, 302, 303, 307, 308, 401, 403, 404):
+                return True
+            # 405/501：不支持 HEAD，改 GET
+            if e.code in (405, 501):
+                try:
+                    req = urllib.request.Request(u, method='GET', headers={'User-Agent': 'mihomo-gui/1.0', 'Range': 'bytes=0-0'})
+                    with urllib.request.urlopen(req, timeout=timeout) as resp:
+                        return True
+                except Exception:
+                    return False
+            return False
+        except urllib.error.URLError as ue:
+            # TLS 证书校验失败等也表示端口可达（交给浏览器处理）
+            if isinstance(ue.reason, ssl.SSLError):
+                return True
+            return False
+        except Exception:
+            return False
+
+    reachable = probe(url)
+    if not reachable:
+        # 打印更明确的排查建议
+        print("无法快速连接到 Dashboard: " + url, file=sys.stderr)
+        # 1) 服务状态
+        if have('systemctl'):
+            try:
+                r = subprocess.run(["systemctl", "is-active", "--quiet", SERVICE])
+                if r.returncode != 0:
+                    print("- 服务未运行：sudo systemctl start mihomo 或 sudo systemctl enable --now mihomo", file=sys.stderr)
+                else:
+                    print("- 服务已运行，但端口不可达：", file=sys.stderr)
+            except Exception:
+                pass
+        # 2) 配置建议
+        print("- 检查 config.yaml 是否配置 external-controller 或 external-controller-tls", file=sys.stderr)
+        print("- 若 external-controller 监听 0.0.0.0/::，浏览器访问会自动映射到 127.0.0.1/[::1]", file=sys.stderr)
+        print("- 若使用 external-ui 且路径不在 MIHOMO_DIR，请在 /etc/sysconfig/mihomo 中设置 SAFE_PATHS", file=sys.stderr)
+        print("- 仍将尝试打开浏览器...", file=sys.stderr)
+
+    if not have('xdg-open'):
+        print(f"未找到 xdg-open，请手动在浏览器打开：{url}", file=sys.stderr)
+        return 1
+
+    try:
+        subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        print(f"无法打开浏览器：{e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
