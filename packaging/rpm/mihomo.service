@@ -5,8 +5,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# 你可以在 /etc/mihomo/config.yaml 中配置，或使用 -d 指定配置目录
-ExecStart=/usr/bin/mihomo -d /etc/mihomo -f /etc/mihomo/config.yaml
+# 默认从 /etc/sysconfig/mihomo 读取配置路径与额外参数（如不存在则使用内置默认值）
+EnvironmentFile=-/etc/sysconfig/mihomo
+Environment=MIHOMO_DIR=/etc/mihomo
+Environment=MIHOMO_EXTRA_ARGS=
+# 如未设置 MIHOMO_CONFIG 或文件不存在，拒绝启动
+ExecStartPre=/bin/sh -c 'test -n "$MIHOMO_CONFIG" -a -f "$MIHOMO_CONFIG" || { echo "MIHOMO_CONFIG 未设置或文件不存在：$MIHOMO_CONFIG"; exit 1; }'
+ExecStart=/bin/sh -c 'exec /usr/bin/mihomo -d "$MIHOMO_DIR" -f "$MIHOMO_CONFIG" $MIHOMO_EXTRA_ARGS'
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=1048576
@@ -16,4 +21,3 @@ LimitNOFILE=1048576
 
 [Install]
 WantedBy=multi-user.target
-

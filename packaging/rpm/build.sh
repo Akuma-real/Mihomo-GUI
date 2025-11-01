@@ -207,12 +207,12 @@ esac
 # 复制 spec 与附属源文件
 cp -f "$workdir/packaging/rpm/mihomo.spec" "$TOPDIR/SPECS/"
 cp -f "$workdir/packaging/rpm/mihomo.service" "$SOURCES/"
-cp -f "$workdir/packaging/rpm/config.yaml" "$SOURCES/"
 cp -f "$workdir/packaging/rpm/mihomo.desktop" "$SOURCES/"
 cp -f "$workdir/packaging/rpm/mihomo-gui" "$SOURCES/"
 cp -f "$workdir/packaging/rpm/mihomo-control" "$SOURCES/"
 cp -f "$workdir/packaging/rpm/mihomo-control.desktop" "$SOURCES/"
 cp -f "$workdir/packaging/rpm/mihomo-control-pkexec" "$SOURCES/"
+cp -f "$workdir/packaging/rpm/sysconfig.mihomo" "$SOURCES/"
 
 echo "将构建 Version=${VER} Release=${REL}" >&2
 

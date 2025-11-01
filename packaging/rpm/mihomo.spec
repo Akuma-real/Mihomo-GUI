@@ -29,14 +29,14 @@ Requires(preun):  systemd
 Requires(postun): systemd
 
 # 源文件在构建脚本中放入 SOURCES 目录
-Source0:        mihomo           # 解压后的二进制，可执行
-Source1:        mihomo.service   # systemd 单元文件
-Source2:        config.yaml      # 默认配置（占位，可替换）
+Source0:        mihomo                   # 解压后的二进制，可执行
+Source1:        mihomo.service           # systemd 单元文件
 Source3:        mihomo.desktop           # Dashboard 桌面入口
 Source4:        mihomo-gui               # 打开 Dashboard 脚本
 Source5:        mihomo-control           # 图形控制器（Tkinter）
 Source6:        mihomo-control.desktop   # 控制器桌面入口
 Source7:        mihomo-control-pkexec    # 提权包装器，传递显示/总线环境
+Source8:        sysconfig.mihomo         # /etc/sysconfig/mihomo 环境配置
 
 %description
 Mihomo 是 Clash.Meta 内核的延续版本。本包直接打包上游预编译二进制，
@@ -55,18 +55,19 @@ Version=0 且在 Release 带上 "alpha" 标记与日期/commit 信息。
 mkdir -p "%{buildroot}%{_bindir}"
 mkdir -p "%{buildroot}%{_unitdir}"
 mkdir -p "%{buildroot}%{_sysconfdir}/mihomo"
+mkdir -p "%{buildroot}%{_sysconfdir}/sysconfig"
 mkdir -p "%{buildroot}%{_localstatedir}/lib/mihomo"
 mkdir -p "%{buildroot}%{_localstatedir}/log/mihomo"
 mkdir -p "%{buildroot}%{_datadir}/applications"
 
 install -m 0755 "%{_sourcedir}/mihomo" "%{buildroot}%{_bindir}/mihomo"
 install -m 0644 "%{_sourcedir}/mihomo.service" "%{buildroot}%{_unitdir}/mihomo.service"
-install -m 0644 "%{_sourcedir}/config.yaml" "%{buildroot}%{_sysconfdir}/mihomo/config.yaml"
 install -m 0755 "%{_sourcedir}/mihomo-gui" "%{buildroot}%{_bindir}/mihomo-gui"
 install -m 0644 "%{_sourcedir}/mihomo.desktop" "%{buildroot}%{_datadir}/applications/mihomo.desktop"
 install -m 0755 "%{_sourcedir}/mihomo-control" "%{buildroot}%{_bindir}/mihomo-control"
 install -m 0644 "%{_sourcedir}/mihomo-control.desktop" "%{buildroot}%{_datadir}/applications/mihomo-control.desktop"
 install -m 0755 "%{_sourcedir}/mihomo-control-pkexec" "%{buildroot}%{_bindir}/mihomo-control-pkexec"
+install -m 0644 "%{_sourcedir}/sysconfig.mihomo" "%{buildroot}%{_sysconfdir}/sysconfig/mihomo"
 
 %post
 # 安装或升级后刷新 unit 缓存
@@ -91,7 +92,6 @@ fi
 %{_bindir}/mihomo
 %{_unitdir}/mihomo.service
 %dir %{_sysconfdir}/mihomo
-%config(noreplace) %{_sysconfdir}/mihomo/config.yaml
 %dir %{_localstatedir}/lib/mihomo
 %dir %{_localstatedir}/log/mihomo
 %{_bindir}/mihomo-gui
@@ -99,6 +99,7 @@ fi
 %{_bindir}/mihomo-control
 %{_bindir}/mihomo-control-pkexec
 %{_datadir}/applications/mihomo-control.desktop
+%config(noreplace) %{_sysconfdir}/sysconfig/mihomo
 
 %changelog
 # 本地构建包，变更历史由使用者维护
