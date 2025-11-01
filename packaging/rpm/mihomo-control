@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os
+import pwd
+import shutil
+import subprocess
+import sys
+import tkinter as tk
+from tkinter import ttk, messagebox
+
+SERVICE = "mihomo"
+DASHBOARD_URL = os.environ.get("MIHOMO_DASHBOARD_URL", "http://127.0.0.1:9090/ui")
+
+
+def have(cmd: str) -> bool:
+    return shutil.which(cmd) is not None
+
+
+def run(cmd, check=True, capture_output=True, text=True):
+    return subprocess.run(cmd, check=check, capture_output=capture_output, text=text)
+
+
+def run_root(cmd):
+    # 在 GUI 场景下优先使用 pkexec 弹出认证框
+    if os.geteuid() == 0:
+        return run(cmd)
+    if have("pkexec"):
+        return run(["pkexec", *cmd])
+    # 无 polkit 时给出友好提示
+    raise RuntimeError("未找到 pkexec。请安装 polkit 或以 root 运行本程序。")
+
+
+def run_systemctl(cmd_args):
+    """优先直接调用 systemctl，让 polkit 代理弹窗并复用认证；
+    无代理或被拒时再回退到 pkexec。"""
+    try:
+        return run(["systemctl", *cmd_args])
+    except subprocess.CalledProcessError as e:
+        msg = (e.stderr or "") + (e.stdout or "")
+        # 常见提示：Interactive authentication required.
+        # 或权限不足等情况，尝试 pkexec 回退一次
+        if "Interactive authentication required" in msg or "permission denied" in msg.lower() or "access denied" in msg.lower():
+            return run_root(["systemctl", *cmd_args])
+        raise
+
+
+def is_active() -> bool:
+    r = subprocess.run(["systemctl", "is-active", "--quiet", SERVICE])
+    return r.returncode == 0
+
+
+def is_enabled() -> bool:
+    r = subprocess.run(["systemctl", "is-enabled", "--quiet", SERVICE])
+    return r.returncode == 0
+
+
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Mihomo 控制面板")
+        self.geometry("460x280")
+        self.resizable(False, False)
+        self._build()
+        self.refresh_status()
+
+    def _build(self):
+        pad = {"padx": 8, "pady": 8}
+
+        frm_top = ttk.Frame(self)
+        frm_top.pack(fill=tk.X, **pad)
+
+        self.lbl_status = ttk.Label(frm_top, text="服务状态：未知", font=(None, 11, "bold"))
+        self.lbl_status.pack(side=tk.LEFT)
+
+        self.lbl_enabled = ttk.Label(frm_top, text=" | 开机自启：未知", font=(None, 10))
+        self.lbl_enabled.pack(side=tk.LEFT)
+
+        frm_btn = ttk.Frame(self)
+        frm_btn.pack(fill=tk.BOTH, expand=True, **pad)
+
+        # 第一行：启动/停止/重启
+        ttk.Button(frm_btn, text="启动", command=self.start).grid(row=0, column=0, sticky="nsew", **pad)
+        ttk.Button(frm_btn, text="停止", command=self.stop).grid(row=0, column=1, sticky="nsew", **pad)
+        ttk.Button(frm_btn, text="重启", command=self.restart).grid(row=0, column=2, sticky="nsew", **pad)
+
+        # 第二行：启用/禁用 开机自启
+        ttk.Button(frm_btn, text="启用自启", command=self.enable).grid(row=1, column=0, sticky="nsew", **pad)
+        ttk.Button(frm_btn, text="禁用自启", command=self.disable).grid(row=1, column=1, sticky="nsew", **pad)
+        ttk.Button(frm_btn, text="查看状态", command=self.show_status).grid(row=1, column=2, sticky="nsew", **pad)
+
+        # 第三行：打开 Dashboard 与退出
+        ttk.Button(frm_btn, text="打开 Dashboard", command=self.open_dashboard).grid(row=2, column=0, columnspan=2, sticky="nsew", **pad)
+        ttk.Button(frm_btn, text="退出", command=self.destroy).grid(row=2, column=2, sticky="nsew", **pad)
+
+        for i in range(3):
+            frm_btn.columnconfigure(i, weight=1)
+        for i in range(3):
+            frm_btn.rowconfigure(i, weight=1)
+
+        frm_hint = ttk.Frame(self)
+        frm_hint.pack(fill=tk.X, **pad)
+        ttk.Label(frm_hint, text="提示：需要进行启动/停止等操作时会请求提权（pkexec）").pack(side=tk.LEFT)
+
+    def refresh_status(self):
+        active = is_active()
+        enabled = is_enabled()
+        self.lbl_status.configure(text=f"服务状态：{'active' if active else 'inactive'}",
+                                  foreground=("#2e7d32" if active else "#c62828"))
+        self.lbl_enabled.configure(text=f" | 开机自启：{'enabled' if enabled else 'disabled'}")
+
+    def _run_op(self, op_name: str, cmd):
+        try:
+            # 优先用普通 systemctl（有 polkit 代理会缓存认证）
+            if cmd and cmd[0] == "systemctl":
+                run_systemctl(cmd[1:])
+            else:
+                run_root(cmd)
+            self.refresh_status()
+        except Exception as e:
+            messagebox.showerror("操作失败", f"{op_name} 失败：\n{e}")
+
+    def start(self):
+        self._run_op("启动", ["systemctl", "start", SERVICE])
+
+    def stop(self):
+        self._run_op("停止", ["systemctl", "stop", SERVICE])
+
+    def restart(self):
+        self._run_op("重启", ["systemctl", "restart", SERVICE])
+
+    def enable(self):
+        self._run_op("启用自启", ["systemctl", "enable", SERVICE])
+
+    def disable(self):
+        self._run_op("禁用自启", ["systemctl", "disable", SERVICE])
+
+    def show_status(self):
+        try:
+            cp = run(["systemctl", "status", SERVICE, "--no-pager"])  # 非 root 也可读
+            StatusDialog(self, cp.stdout)
+        except subprocess.CalledProcessError as e:
+            out = (e.stdout or "") + "\n" + (e.stderr or "")
+            StatusDialog(self, out)
+
+    def open_dashboard(self):
+        if not have("xdg-open"):
+            messagebox.showinfo("打开失败", f"未找到 xdg-open，请手动打开：\n{DASHBOARD_URL}")
+            return
+        try:
+            # 若以 root 运行（pkexec 模式），优先以原用户打开浏览器
+            if os.geteuid() == 0:
+                pk_uid = os.environ.get("PKEXEC_UID")
+                if pk_uid is not None:
+                    try:
+                        uid = int(pk_uid)
+                        user = pwd.getpwuid(uid).pw_name
+                        env_vars = {}
+                        for k in ("DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "XAUTHORITY"):
+                            v = os.environ.get(k)
+                            if v:
+                                env_vars[k] = v
+                        cmd = ["runuser", "-u", f"#{uid}", "--", "env"] + [f"{k}={v}" for k, v in env_vars.items()] + ["xdg-open", DASHBOARD_URL]
+                        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        return
+                    except Exception:
+                        pass
+            # 普通用户模式或回退路径
+            subprocess.Popen(["xdg-open", DASHBOARD_URL], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            messagebox.showerror("打开失败", f"无法打开浏览器：\n{e}")
+
+
+class StatusDialog(tk.Toplevel):
+    def __init__(self, master, text):
+        super().__init__(master)
+        self.title("mihomo 状态")
+        self.geometry("700x480")
+        self.resizable(True, True)
+        txt = tk.Text(self, wrap="word", font=("Courier New", 10))
+        txt.pack(fill=tk.BOTH, expand=True)
+        txt.insert("1.0", text)
+        txt.configure(state=tk.DISABLED)
+
+
+def main():
+    # 启动即提权（若不是 root），确保一次认证后整个会话无二次弹窗
+    if os.geteuid() != 0 and have("pkexec") and os.environ.get("MIHOMO_SKIP_PKEXEC") != "1":
+        # 尝试传递常见图形环境变量，确保 GUI 能在用户会话显示
+        env_args = []
+        for k in ("DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "XAUTHORITY"):
+            v = os.environ.get(k)
+            if v:
+                env_args += [f"{k}={v}"]
+        exe = shutil.which("mihomo-control") or os.path.realpath(sys.argv[0])
+        args = ["pkexec", "env", *env_args, exe]
+        os.execvp(args[0], args)
+
+    # 依赖检查：python3-tkinter、polkit（pkexec）
+    missing = []
+    try:
+        import tkinter  # noqa: F401
+    except Exception:
+        missing.append("python3-tkinter")
+    if not have("pkexec") and os.geteuid() != 0:
+        missing.append("polkit (pkexec)")
+    if missing:
+        messagebox.showwarning("依赖缺失", "缺少依赖：\n- " + "\n- ".join(missing) + "\n\n可能无法进行提权操作或显示窗口。")
+
+    app = App()
+    app.mainloop()
+
+
+if __name__ == "__main__":
+    main()

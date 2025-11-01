@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+URL="${MIHOMO_DASHBOARD_URL:-http://127.0.0.1:9090/ui}"
+
+if command -v systemctl >/dev/null 2>&1; then
+  if ! systemctl is-active --quiet mihomo 2>/dev/null; then
+    echo "提示：mihomo 服务未运行，Dashboard 可能无法访问。" >&2
+    echo "可执行：sudo systemctl start mihomo 或 sudo systemctl enable --now mihomo" >&2
+  fi
+fi
+
+if command -v xdg-open >/dev/null 2>&1; then
+  nohup xdg-open "$URL" >/dev/null 2>&1 &
+else
+  echo "未找到 xdg-open，请手动在浏览器打开：$URL" >&2
+fi
+

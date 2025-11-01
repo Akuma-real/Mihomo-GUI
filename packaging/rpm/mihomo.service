@@ -1,0 +1,19 @@
+[Unit]
+Description=Mihomo (Clash.Meta) Service
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 你可以在 /etc/mihomo/config.yaml 中配置，或使用 -d 指定配置目录
+ExecStart=/usr/bin/mihomo -d /etc/mihomo -f /etc/mihomo/config.yaml
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=1048576
+# 如需以非 root 运行，可取消注释以下行并创建对应用户
+# User=mihomo
+# Group=mihomo
+
+[Install]
+WantedBy=multi-user.target
+

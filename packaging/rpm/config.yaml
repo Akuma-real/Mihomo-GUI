@@ -1,0 +1,36 @@
+# 这是一个最小化的占位配置，请按需修改。
+# 完整示例与文档参考：
+# https://github.com/MetaCubeX/mihomo
+
+port: 7890
+socks-port: 7891
+redir-port: 7892
+mixed-port: 0
+mode: Rule
+log-level: info
+allow-lan: false
+ipv6: true
+
+external-controller: 127.0.0.1:9090
+secret: ""
+
+# 简易 GUI：使用远程 Dashboard（省去本地静态文件）
+# 访问地址：http://127.0.0.1:9090/ui
+external-ui-url: https://metacubex.github.io/metacubexd/
+
+# proxies:
+#   - name: example
+#     type: ss
+#     server: 1.2.3.4
+#     port: 8388
+#     cipher: chacha20-ietf-poly1305
+#     password: foobar
+
+# proxy-groups:
+#   - name: Proxy
+#     type: select
+#     proxies:
+#       - example
+
+# rules:
+#   - MATCH,Proxy

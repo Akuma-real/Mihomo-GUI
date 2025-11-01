@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Mihomo 控制面板
+Comment=以图形界面启动/停止/重启 mihomo 并打开 Dashboard
+Exec=pkexec /usr/bin/mihomo-control
+Icon=network-vpn
+Terminal=false
+Categories=Network;Utility;
+Keywords=proxy;clash;meta;mihomo;vpn;service;

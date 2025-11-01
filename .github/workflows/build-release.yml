@@ -1,0 +1,143 @@
+name: Build RPM and Release
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  PRE_TAG: pre
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build RPM (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [ amd64, arm64, armv7 ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            rpm jq xz-utils gzip curl file
+
+      - name: Build (tag release)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNEL: tag
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          FORCE_ARCH=${{ matrix.arch }} ./packaging/rpm/build.sh
+
+      - name: Build (pre-release)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNEL: alpha
+        run: |
+          FORCE_ARCH=${{ matrix.arch }} ./packaging/rpm/build.sh
+
+      - name: Upload artifact
+        if: ${{ env.ACT != 'true' }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: rpm-${{ matrix.arch }}
+          path: |
+            rpmbuild/RPMS/**/*
+          if-no-files-found: error
+
+  release:
+    if: ${{ env.ACT != 'true' }}
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: dist
+
+      - name: List artifacts
+        run: |
+          find dist -type f -name '*.rpm' -print
+
+      - name: Publish pre-release (update same tag)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: ncipollo/release-action@v1
+        with:
+          allowUpdates: true
+          removeArtifacts: true
+          replacesArtifacts: true
+          tag: ${{ env.PRE_TAG }}
+          name: Pre-release Builds
+          prerelease: true
+          makeLatest: false
+          body: |
+            自动构建的 RPM 预发布包。
+
+            - 控制面板与 GUI 仓库： https://github.com/Akuma-real/Mihomo-GUI
+            - 安装后在应用菜单中找到 “Mihomo 控制面板 / Mihomo Dashboard” 即可使用。
+            - x86_64/arm64/armv7hl 三架构产物已附在本页。
+          artifacts: |
+            dist/**/*.rpm
+          artifactErrorsFailBuild: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mirror pre-release to GUI repo
+        if: ${{ !startsWith(github.ref, 'refs/tags/') && secrets.GUI_REPO_TOKEN != '' && github.repository != 'Akuma-real/Mihomo-GUI' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: Akuma-real/Mihomo-GUI
+          tag_name: ${{ env.PRE_TAG }}
+          name: Pre-release Builds (RPM)
+          prerelease: true
+          make_latest: false
+          files: |
+            dist/**/*.rpm
+        env:
+          GITHUB_TOKEN: ${{ secrets.GUI_REPO_TOKEN }}
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: ncipollo/release-action@v1
+        with:
+          allowUpdates: true
+          removeArtifacts: false
+          replacesArtifacts: true
+          tag: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          prerelease: false
+          makeLatest: true
+          body: |
+            正式版构建的 RPM 包。
+
+            - 相关 GUI： https://github.com/Akuma-real/Mihomo-GUI
+            - 安装说明：安装后在应用菜单中找到 “Mihomo 控制面板 / Mihomo Dashboard”。
+          artifacts: |
+            dist/**/*.rpm
+          artifactErrorsFailBuild: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mirror tagged release to GUI repo
+        if: ${{ startsWith(github.ref, 'refs/tags/') && secrets.GUI_REPO_TOKEN != '' && github.repository != 'Akuma-real/Mihomo-GUI' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: Akuma-real/Mihomo-GUI
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }} (RPM)
+          prerelease: false
+          make_latest: true
+          files: |
+            dist/**/*.rpm
+        env:
+          GITHUB_TOKEN: ${{ secrets.GUI_REPO_TOKEN }}
