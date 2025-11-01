@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+from tkinter import scrolledtext
 
 SERVICE = "mihomo"
 DASHBOARD_URL = os.environ.get("MIHOMO_DASHBOARD_URL", "http://127.0.0.1:9090/ui")
@@ -84,6 +85,7 @@ class App(tk.Tk):
         self.ent_cfg = ttk.Entry(frm_cfg, textvariable=self.var_cfg, width=56)
         self.ent_cfg.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,8))
         ttk.Button(frm_cfg, text="选择...", command=self.choose_config).pack(side=tk.LEFT)
+        ttk.Button(frm_cfg, text="打开 sysconfig", command=self.open_sysconfig_editor).pack(side=tk.LEFT, padx=(8,0))
 
         frm_btn = ttk.Frame(self)
         frm_btn.pack(fill=tk.BOTH, expand=True, **pad)
@@ -131,16 +133,92 @@ class App(tk.Tk):
             pass
         return ""
 
+    def _effective_home(self) -> str:
+        # 在 pkexec 下优先使用原始用户的 HOME
+        pk_uid = os.environ.get("PKEXEC_UID")
+        if pk_uid is not None:
+            try:
+                uid = int(pk_uid)
+                return pwd.getpwuid(uid).pw_dir
+            except Exception:
+                pass
+        return os.path.expanduser("~")
+
+    def _is_within(self, base: str, path: str) -> bool:
+        try:
+            base_real = os.path.realpath(base)
+            path_real = os.path.realpath(path)
+            return os.path.commonpath([base_real, path_real]) == base_real
+        except Exception:
+            return False
+
     def choose_config(self):
+        home = self._effective_home()
         filename = filedialog.askopenfilename(
-            title="选择 mihomo 配置文件",
+            title="选择 mihomo 配置文件（仅限当前用户目录）",
+            initialdir=home,
             filetypes=[("YAML 文件", "*.yaml *.yml"), ("所有文件", "*.*")]
         )
         if not filename:
             return
+        if not self._is_within(home, filename):
+            messagebox.showwarning("不被允许", "仅允许选择当前用户主目录下的配置文件。\n如需使用系统路径，请手动编辑 /etc/sysconfig/mihomo。")
+            return
         self.var_cfg.set(filename)
         # 写入 /etc/sysconfig/mihomo 并重启服务
         self.apply_config(filename)
+
+    def open_sysconfig_editor(self):
+        path = self._sysconfig_path()
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except Exception:
+            content = (
+                "# /etc/sysconfig/mihomo\n"
+                "# 设置示例：\n"
+                "# MIHOMO_DIR=\"/etc/mihomo\"\n"
+                "# MIHOMO_CONFIG=\"/home/yourname/.config/mihomo/config.yaml\"\n"
+                "# MIHOMO_EXTRA_ARGS=\"\"\n"
+            )
+
+        win = tk.Toplevel(self)
+        win.title("编辑 /etc/sysconfig/mihomo")
+        win.geometry("760x520")
+        win.transient(self)
+        win.grab_set()
+
+        txt = scrolledtext.ScrolledText(win, wrap="none", font=("Courier New", 10))
+        txt.pack(fill=tk.BOTH, expand=True)
+        txt.insert("1.0", content)
+
+        def do_save(restart: bool):
+            new_content = txt.get("1.0", tk.END)
+            try:
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write(new_content)
+                run_systemctl(["daemon-reload"])  # 普通模式尽量先尝试
+                if restart:
+                    self._run_op("重启", ["systemctl", "restart", SERVICE])
+                self.var_cfg.set(self._get_current_config())
+                messagebox.showinfo("已保存", "sysconfig 已保存" + ("并已重启服务" if restart else ""))
+            except Exception:
+                script = (
+                    "cat >/etc/sysconfig/mihomo <<'EOF'\n" + new_content + "EOF\n"
+                    "systemctl daemon-reload\n" + ("systemctl restart mihomo\n" if restart else "")
+                )
+                try:
+                    run_root(["bash", "-lc", script])
+                    self.var_cfg.set(self._get_current_config())
+                    messagebox.showinfo("已保存", "sysconfig 已保存" + ("并已重启服务" if restart else ""))
+                except Exception as e:
+                    messagebox.showerror("保存失败", f"无法保存到 {path}:\n{e}")
+
+        frm_btn = ttk.Frame(win)
+        frm_btn.pack(fill=tk.X)
+        ttk.Button(frm_btn, text="保存", command=lambda: do_save(False)).pack(side=tk.RIGHT, padx=8, pady=8)
+        ttk.Button(frm_btn, text="保存并重启服务", command=lambda: do_save(True)).pack(side=tk.RIGHT, padx=0, pady=8)
+        ttk.Button(frm_btn, text="关闭", command=win.destroy).pack(side=tk.LEFT, padx=8, pady=8)
 
     def apply_config(self, config_path: str):
         cfg_dir = os.path.dirname(config_path) or "/etc/mihomo"

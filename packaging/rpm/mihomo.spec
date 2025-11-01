@@ -87,6 +87,12 @@ fi
 if command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload >/dev/null 2>&1 || :
 fi
+%if 0%{?fedora} || 0%{?rhel} || 0%{?centos} || 0%{?suse}
+# 卸载时尝试清理运行数据与日志（不清理配置）
+if [ $1 -eq 0 ]; then
+  rm -rf "%{_localstatedir}/lib/mihomo" "%{_localstatedir}/log/mihomo" || :
+fi
+%endif
 
 %files
 %{_bindir}/mihomo
